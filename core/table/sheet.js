@@ -26,9 +26,45 @@ export class Sheet extends SheetBase {
      * @param {Function} cellEventHandler
      * @param targetHashSheet
      * */
-    renderSheet(cellEventHandler = this.lastCellEventHandler, targetHashSheet = this.hashSheet) {
+    renderSheet(cellEventHandler = this.lastCellEventHandler, targetHashSheet = this.hashSheet, lastCellsHashSheet = null) {
         this.lastCellEventHandler = cellEventHandler;
 
+        // 预先计算渲染所需的数据副本，避免修改实际的 this.hashSheet
+        const currentHashSheet = Array.isArray(targetHashSheet) ? targetHashSheet : (this.hashSheet || []);
+        // 仅对数组做本地浅拷贝；不要调用 BASE.copyHashSheets（它面向 hash_sheets 映射对象，不是二维数组）
+        let renderHashSheet = Array.isArray(currentHashSheet)
+            ? currentHashSheet.map(r => (Array.isArray(r) ? r.slice() : []))
+            : [];
+
+        // 集成单元格高亮逻辑（来源：chatSheetsDataView.cellHighlight）
+        // 1) 获取上一轮的 hash_sheets（优先使用参数；若无参数且存在渲染上下文，则自动计算）
+        let prevHashSheetsMap = lastCellsHashSheet;
+        if (prevHashSheetsMap === null && typeof DERIVED?.any?.renderDeep === 'number' && DERIVED.any.renderDeep !== 0) {
+            try {
+                prevHashSheetsMap = BASE.getLastSheetsPiece(DERIVED.any.renderDeep - 1, 3, false)?.piece?.hash_sheets;
+                if (prevHashSheetsMap) prevHashSheetsMap = BASE.copyHashSheets(prevHashSheetsMap);
+            } catch (_) {
+                // 忽略获取失败，保持无高亮
+            }
+        }
+
+        const lastHashSheet = prevHashSheetsMap?.[this.uid] || [];
+
+        // 2) 找出被删除的行（上一轮存在但本轮不存在的行首），并在渲染副本中插入这些行用于高亮展示（不修改实际数据）
+        const deleteRowFirstHashes = [];
+        if (prevHashSheetsMap) {
+            const currentFlat = currentHashSheet.flat();
+            lastHashSheet.forEach((row, index) => {
+                if (!currentFlat.includes(row?.[0])) {
+                    deleteRowFirstHashes.push(row?.[0]);
+                    // 在渲染副本中插入
+                    const rowCopy = row ? row.slice() : [];
+                    renderHashSheet.splice(index, 0, rowCopy);
+                }
+            });
+        }
+
+        // DOM 构建
         this.element = document.createElement('table');
         this.element.classList.add('sheet-table', 'tableDom');
         this.element.style.position = 'relative';
@@ -46,8 +82,8 @@ export class Sheet extends SheetBase {
         // 清空 tbody 的内容
         tbody.innerHTML = '';
 
-        // 遍历 hashSheet，渲染每一个单元格
-        targetHashSheet.forEach((rowUids, rowIndex) => {
+        // 遍历渲染用的 hashSheet 副本，渲染每一个单元格
+        renderHashSheet.forEach((rowUids, rowIndex) => {
             const rowElement = document.createElement('tr');
             rowUids.forEach((cellUid, colIndex) => {
                 let cell = this.cells.get(cellUid)
@@ -66,6 +102,86 @@ export class Sheet extends SheetBase {
             });
             tbody.appendChild(rowElement); // 将 rowElement 添加到 tbody 中
         });
+
+        // 若无上一轮数据，则不进行高亮，直接返回
+        if (!prevHashSheetsMap) return this.element;
+
+        // 当当前或上一轮表格都只有表头（或为空）时，直接返回（不做 keep-all 处理）
+        if ((currentHashSheet.length < 2) && (lastHashSheet.length < 2)) {
+            renderHashSheet[0].forEach((hash) => {
+                const sheetCell = this.cells.get(hash);
+                const cellElement = sheetCell?.element;
+                cellElement.classList.add('keep-all-item');
+            })
+            return this.element; // 表格内容为空时不执行后续逻辑，提升健壮性
+        }
+
+        const lastHashSheetFlat = lastHashSheet.flat();
+
+        // 3) 为每个单元格打上变化类型标记（基于渲染副本）
+        const changeSheet = renderHashSheet.map((row) => {
+            const isNewRow = !lastHashSheetFlat.includes(row?.[0]);
+            const isDeletedRow = deleteRowFirstHashes.includes(row?.[0]);
+            return row.map((hash) => {
+                if (isNewRow) return { hash, type: 'newRow' };
+                if (isDeletedRow) return { hash, type: 'deletedRow' };
+                if (!lastHashSheetFlat.includes(hash)) return { hash, type: 'update' };
+                return { hash, type: 'keep' };
+            })
+        });
+
+        // 4) 根据变化类型为元素添加样式类
+        let isKeepAllSheet = true;
+        let isKeepAllCol = Array.from({ length: changeSheet[0].length }, (_, i) => i < 2 ? false : true);
+        changeSheet.forEach((row, rowIndex) => {
+            if (rowIndex === 0) return;
+            let isKeepAllRow = true;
+            row.forEach((cell, colIndex) => {
+                const sheetCell = this.cells.get(cell.hash);
+                const cellElement = sheetCell?.element;
+                if (!cellElement) return;
+
+                if (cell.type === 'newRow') {
+                    cellElement.classList.add('insert-item');
+                    isKeepAllRow = false;
+                    isKeepAllCol[colIndex] = false;
+                } else if (cell.type === 'update') {
+                    cellElement.classList.add('update-item');
+                    isKeepAllRow = false;
+                    isKeepAllCol[colIndex] = false;
+                } else if (cell.type === 'deletedRow') {
+                    cellElement.classList.add('delete-item');
+                    isKeepAllRow = false;
+                } else {
+                    cellElement.classList.add('keep-item');
+                }
+            });
+            if (isKeepAllRow) {
+                row.forEach((cell) => {
+                    const sheetCell = this.cells.get(cell.hash);
+                    const cellElement = sheetCell?.element;
+                    cellElement.classList.add('keep-all-item');
+                })
+            } else {
+                isKeepAllSheet = false;
+            }
+        });
+        if (isKeepAllSheet) {
+            renderHashSheet[0].forEach((hash) => {
+                const sheetCell = this.cells.get(hash);
+                const cellElement = sheetCell?.element;
+                cellElement.classList.add('keep-all-item');
+            })
+        } else {
+            renderHashSheet.forEach((row) => {
+                row.filter((_, i) => isKeepAllCol[i]).forEach((hash) => {
+                    const sheetCell = this.cells.get(hash);
+                    const cellElement = sheetCell?.element;
+                    cellElement.classList.add('keep-all-item');
+                })
+            })
+        }
+
         return this.element;
     }
 
@@ -114,24 +230,24 @@ export class Sheet extends SheetBase {
     }
 
     /**
-     * 获取테이블 내용的提示词，可以通过指定['title', 'node', 'headers', 'rows', 'editRules']中的部分，只导入部分内容
-     * @returns 테이블 내용提示词
+     * 테이블 내용의 프롬프트는 ['title', 'node', 'headers', 'rows', 'editRules']중 일부를 지정하여 해당 부분만 가져올 수 있습니다.
+     * @returns 테이블 내용 프롬프트
      */
     getTableText(index, customParts = ['title', 'node', 'headers', 'rows', 'editRules']) {
         console.log('테이블 내용 프롬프트를 임포트합니다.', this)
-        if (this.triggerSend && this.triggerSendDeep < 1) return ''; // 如果触发深度=0，则不发送，可以用作信息一览표
+        if (this.triggerSend && this.triggerSendDeep < 1) return ''; // 깊이 트리거=0이면 전송되지 않으며, 정보 요약표로 활용될 수 있습니다.
         const title = `* ${index}:${this.name}\n`;
-        const node = this.source.data.note && this.source.data.note !== '' ? '【설명】' + this.source.data.note + '\n' : '';
+        const node = this.source.data.note && this.source.data.note !== '' ? '【说明】' + this.source.data.note + '\n' : '';
         const headers = "rowIndex," + this.getCellsByRowIndex(0).slice(1).map((cell, index) => index + ':' + cell.data.value).join(',') + '\n';
         let rows = this.getSheetCSV()
         const editRules = this.#getTableEditRules() + '\n';
-        // 新增触发式테이블 내용发送，检索聊天内容的角色名
+        // 트리거 방식의 테이블 내용 전송 기능을 추가하여 채팅 내용에서 역할 이름을 검색합니다.
 
 
         if (rows && this.triggerSend) {
             const chats = USER.getContext().chat;
             console.log("트리거 전송 모드에 진입합니다, 테스트 임포트 chats", chats)
-            // 提取所有聊天内容中的 content 值
+            // 모든 채팅 내용에서 content 값을 추출합니다.
             const chat_content = getLatestChatHistory(chats, this.triggerSendDeep)
             console.log('채팅 내용 임포트: ', chat_content)
             console.log("채팅 내용 타입:", typeof (chat_content))
@@ -139,7 +255,7 @@ export class Sheet extends SheetBase {
                 line = line.trim();
                 if (!line) return false;
                 const parts = line.split(',');
-                const str1 = parts?.[1] ?? ""; // 字符串1对应인덱스1
+                const str1 = parts?.[1] ?? ""; // 문자열 1은 인덱스 1에 해당합니다
                 return chat_content.includes(str1);
             });
             rows = rowsArray.join('\n');
@@ -153,7 +269,7 @@ export class Sheet extends SheetBase {
             result += node;
         }
         if (customParts.includes('headers')) {
-            result += '【테이블 내용】\n' + headers;
+            result += '【表格内容】\n' + headers;
         }
         if (customParts.includes('rows')) {
             result += rows;
@@ -193,7 +309,16 @@ export class Sheet extends SheetBase {
         sheetDataToSave.content = this.getContent(true)
         return sheetDataToSave
     }
-    /** _______________________________________ 以下함수不进行外部调用 _______________________________________ */
+
+    getReadableJson() {
+        return{
+            tableName: this.name,
+            tableUid: this.uid,
+            columns: this.getHeader(),
+            content: this.getContent()
+        }
+    }
+    /** _______________________________________ 以下函数不进行外部调用 _______________________________________ */
 
     #load(target) {
         if (target == null) {
@@ -208,7 +333,7 @@ export class Sheet extends SheetBase {
             throw new Error('해당하는 템플릿을 찾을 수 없습니다.');
         }
         if (typeof target === 'object') {
-            if (target.domain === this.SheetDomain.global) {
+            if (target.domain === SheetBase.SheetDomain.global) {
                 console.log('테이블을 템플릿으로부터 변환', target, this);
                 this.loadJson(target)
                 this.domain = 'chat'
@@ -223,17 +348,17 @@ export class Sheet extends SheetBase {
         }
     }
     /**
-     * 获取테이블编辑规则提示词
+     * 获取表格编辑规则提示词
      * @returns
      */
     #getTableEditRules() {
         const source = this.source;
-        if (this.required && this.isEmpty()) return '【추가/삭제/수정 트리거 조건】\n삽입：' + source.data.initNode + '\n'
+        if (this.required && this.isEmpty()) return '【增删改触发条件】\n삽입：' + source.data.initNode + '\n'
         else {
-            let editRules = '【추가/삭제/수정 트리거 조건】\n'
-            if (source.data.insertNode) editRules += ('삽입：' + source.data.insertNode + '\n')
-            if (source.data.updateNode) editRules += ('업데이트：' + source.data.updateNode + '\n')
-            if (source.data.deleteNode) editRules += ('삭제：' + source.data.deleteNode + '\n')
+            let editRules = '【增删改触发条件】\n'
+            if (source.data.insertNode) editRules += ('插入：' + source.data.insertNode + '\n')
+            if (source.data.updateNode) editRules += ('更新：' + source.data.updateNode + '\n')
+            if (source.data.deleteNode) editRules += ('删除：' + source.data.deleteNode + '\n')
             return editRules
         }
     }
@@ -276,8 +401,8 @@ export class Sheet extends SheetBase {
 
 /**
  * 获取制定深度的聊天历史内容
- * @param {当前聊天文件} chat 
- * @param {扫描深度} deep 
+ * @param {当前聊天文件} chat
+ * @param {扫描深度} deep
  * @returns string
  */
 function getLatestChatHistory(chat, deep) {

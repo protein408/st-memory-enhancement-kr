@@ -1,7 +1,6 @@
 // absoluteRefresh.js
 import { BASE, DERIVED, EDITOR, SYSTEM, USER } from '../../core/manager.js';
-import { findTableStructureByIndex, convertOldTablesToNewSheets, executeTableEditActions, getTableEditTag } from "../../index.js";
-import { insertRow, updateRow, deleteRow } from "../../core/table/oldTableActions.js";
+import {  convertOldTablesToNewSheets, executeTableEditActions, getTableEditTag } from "../../index.js";
 import JSON5 from '../../utils/json5.min.mjs'
 import { updateSystemMessageTableStatus } from "../renderer/tablePushToChat.js";
 import { TableTwoStepSummary } from "./separateTableUpdate.js";
@@ -9,6 +8,7 @@ import { estimateTokenCount, handleCustomAPIRequest, handleMainAPIRequest } from
 import { profile_prompts } from "../../data/profile_prompts.js";
 import { Form } from '../../components/formManager.js';
 import { refreshRebuildTemplate } from "../settings/userExtensionSetting.js"
+import { safeParse } from '../../utils/stringUtil.js';
 
 // 在파싱响应后添加验证
 function validateActions(actions) {
@@ -121,7 +121,7 @@ export function initRefreshTypeSelector() {
                     case 'refresh':
                         return '**이전**' + (value.name || key);
                     case 'third_party':
-                        return '**타사 작성자** ' + (value.name || key);
+                        return '**Third-party author** ' + (value.name || key);
                     default:
                         return value.name || key;
                 }
@@ -192,13 +192,11 @@ export function initRefreshTypeSelector() {
 export async function getPromptAndRebuildTable(templateName = '', additionalPrompt, force, isSilentUpdate = USER.tableBaseSetting.bool_silent_refresh, chatToBeUsed = '') {
     let r = '';
     try {
-        // 根据提示模板类型选择不同的테이블处理함수
-        // const force = $('#bool_force_refresh').prop('checked');
         r = await rebuildTableActions(force || true, isSilentUpdate, chatToBeUsed);
         return r;
     } catch (error) {
-        console.error('프롬프트 템플릿 가져오기 실패:', error);
-        EDITOR.error(`프롬프트 템플릿 가져오기 실패`, error.message, error);
+        console.error('요약 실패:', error);
+        EDITOR.error(`요약 실패: ${error.message}`);
     }
 }
 
@@ -210,21 +208,12 @@ export async function getPromptAndRebuildTable(templateName = '', additionalProm
  * @returns
  */
 export async function rebuildTableActions(force = false, silentUpdate = USER.tableBaseSetting.bool_silent_refresh, chatToBeUsed = '') {
+    // #region 表格总结执行
     let r = '';
     if (!SYSTEM.lazy('rebuildTableActions', 1000)) return;
 
-    // 如果不是强制새로고침，계속할지 확인
-    // if (!force) {
-    //     // 显示配置状态
-    //     const tableRefreshPopup = getRefreshTableConfigStatus(1);
-    //     const confirmation = await EDITOR.callGenericPopup(tableRefreshPopup, EDITOR.POPUP_TYPE.CONFIRM, '', { okButton: "계속하기", cancelButton: "취소" });
-    //     if (!confirmation) return;
-    // }
-
-    // 开始테이블 재생성 완료
     console.log('전체 테이블 재생성 시작');
     const isUseMainAPI = $('#use_main_api').prop('checked');
-
     try {
         const { piece } = BASE.getLastSheetsPiece();
         if (!piece) {
@@ -232,31 +221,22 @@ export async function rebuildTableActions(force = false, silentUpdate = USER.tab
         }
         const latestTables = BASE.hashSheetsToSheets(piece.hash_sheets).filter(sheet => sheet.enable);
         DERIVED.any.waitingTable = latestTables;
+        DERIVED.any.waitingTableIdMap = latestTables.map(table => table.uid);
 
-        const oldTable = sheetsToTables(latestTables)
-        let originText = tablesToString(latestTables);
+        const tableJson = latestTables.map((table, index) => ({...table.getReadableJson(), tableIndex: index}));
+        const tableJsonText = JSON.stringify(tableJson);
 
-        // 테이블 헤더 정보 추출
-        const tableHeadersOnly = oldTable.map((table, index) => {
-            let name = `Table ${index + 1}`;
-            if (typeof table.tableName === 'string' && table.tableName) {
-                name = table.tableName;
-            }
-            let headers = [];
-            if (Array.isArray(table.headers) && table.headers.length > 0) {
-                headers = table.headers;
-            } else if (Array.isArray(table.columns) && table.columns.length > 0) {
-                headers = table.columns;
-            }
+        // 提取表头信息
+        const tableHeaders = latestTables.map(table => {
             return {
-                tableName: name,
-                headers: headers
+                tableId: table.uid,
+                headers: table.getHeader()
             };
         });
-        const tableHeadersJson = JSON.stringify(tableHeadersOnly);
-        console.log('헤더 데이터 (JSON):', tableHeadersJson);
+        const tableHeadersText = JSON.stringify(tableHeaders);
 
-        console.log('정리 - 최신 테이블 데이터:', originText);
+        console.log('헤더 데이터 (JSON):', tableHeadersText);
+        console.log('정리 - 최신 테이블 데이터:', tableJsonText);
 
         // 获取最近clear_up_stairs条聊天记录
         const chat = USER.getContext().chat;
@@ -264,7 +244,6 @@ export async function rebuildTableActions(force = false, silentUpdate = USER.tab
             USER.tableBaseSetting.clear_up_stairs,
             USER.tableBaseSetting.ignore_user_sent,
             USER.tableBaseSetting.rebuild_token_limit_value
-            // USER.tableBaseSetting.use_token_limit ? USER.tableBaseSetting.rebuild_token_limit_value : 0
         ) : chatToBeUsed;
 
         // 构建AI提示
@@ -294,9 +273,9 @@ export async function rebuildTableActions(force = false, silentUpdate = USER.tab
 
         const replacePrompt = (input) => {
             let output = input
-            output = output.replace(/\$0/g, originText);
+            output = output.replace(/\$0/g, tableJsonText);
             output = output.replace(/\$1/g, lastChats);
-            output = output.replace(/\$2/g, tableHeadersJson);
+            output = output.replace(/\$2/g, tableHeadersText);
             output = output.replace(/\$3/g, DERIVED.any.additionalPrompt ?? '');
             return output
         }
@@ -310,15 +289,13 @@ export async function rebuildTableActions(force = false, silentUpdate = USER.tab
 
 
         // userPrompt에서 $0과 $1 필드를 검색하여 $0을 originText로, $1을 lastChats로, $2를 빈 헤더로 대체
-        userPrompt = userPrompt.replace(/\$0/g, originText);
+        userPrompt = userPrompt.replace(/\$0/g, tableJsonText);
         userPrompt = userPrompt.replace(/\$1/g, lastChats);
-        userPrompt = userPrompt.replace(/\$2/g, tableHeadersJson);
+        userPrompt = userPrompt.replace(/\$2/g, tableHeadersText);
         userPrompt = userPrompt.replace(/\$3/g, DERIVED.any.additionalPrompt ?? '');
 
         console.log('systemPrompt:', parsedSystemPrompt);
         // console.log('userPrompt:', userPrompt);
-
-
 
         // 응답 내용 생성
         let rawContent;
@@ -360,28 +337,29 @@ export async function rebuildTableActions(force = false, silentUpdate = USER.tab
 
         if (!rawContent.trim()) {
             EDITOR.clear();
-            EDITOR.error('API 응답 내용이 비어 있어 테이블 처리를 계속할 수 없습니다.');
+            EDITOR.error('빈 API 응답은 일반적으로 API 제한을 위반했음을 나타냅니다.');
             console.error('API 응답 내용이 비어 있음, rawContent:', rawContent);
             return;
         }
 
         const temp = USER.tableBaseSetting.rebuild_message_template_list[USER.tableBaseSetting.lastSelectedTemplate];
         if (temp && temp.parseType === 'text') {
-            const previewHtml = `
-                <div>
-                    <div style="margin-bottom: 10px; display: flex; align-items: center;">
-                        <span style="margin-right: 10px;">반환된 요약 결과입니다. 복사하여 사용해주세요</span>
-                    </div>
-                    <textarea id="rebuild_text_preview" rows="10" style="width: 100%">${rawContent}</textarea>
-                </div>`;
-
-            const popup = new EDITOR.Popup(previewHtml, EDITOR.POPUP_TYPE.TEXT, '', { wide: true });
-            await popup.show()
-            return
+            showTextPreview(rawContent);
         }
 
-        // 데이터 정제
-        let cleanContentTable = fixTableFormat(rawContent);
+        console.log('응답 내용은 다음과 같습니다:', rawContent);
+        let cleanContentTable = null;
+        try{
+            const parsed = safeParse(rawContent);
+            cleanContentTable = Array.isArray(parsed) ? parsed[parsed.length - 1] : parsed;
+        }catch (error) {
+            console.error('응답 내용을 구문 분석하지 못했습니다:', error);
+            EDITOR.clear();
+            EDITOR.error('응답 내용을 구문 분석하지 못했습니다. API에서 반환된 내용이 예상 형식을 충족하는지 확인하세요.', error.message, error);
+            showErrorTextPreview(rawContent);
+            return;
+        }
+        
         console.log('cleanContent:', cleanContentTable);
 
         // 테이블 다시 저장
@@ -389,26 +367,13 @@ export async function rebuildTableActions(force = false, silentUpdate = USER.tab
             try {
                 // 데이터 형식 검증
                 if (!Array.isArray(cleanContentTable)) {
-                    throw new Error("생성된 새 테이블 데이터가 배열이 아닙니다");
+                    throw new Error("生成的新表格数据不是数组");
                 }
-                // 변경사항 표시
-                // TODO
-                compareAndMarkChanges(oldTable, cleanContentTable);
-                // console.log('compareAndMarkChanges 후의 cleanContent:', cleanContentTable);
 
-                // 참조 문제 방지를 위한 깊은 복사
-                const clonedTables = tableDataToTables(cleanContentTable);
-                console.log('깊은 복사 후 cleanContent:', clonedTables);
-
-                // 제목 수정 방지
-                clonedTables.forEach((table, index) => {
-                    table.tableName = oldTable[index].tableName
-                });
-
-                // 자동 업데이트가 아닌 경우 작업 확인 표시
+                // 如果不是静默更新，显示操作确认
                 if (!silentUpdate) {
                     // uniqueActions 내용을 사용자에게 보여주고 계속할지 확인
-                    const confirmContent = confirmTheOperationPerformed(clonedTables);
+                    const confirmContent = confirmTheOperationPerformed(cleanContentTable);
                     const tableRefreshPopup = new EDITOR.Popup(confirmContent, EDITOR.POPUP_TYPE.TEXT, '', { okButton: "계속하기", cancelButton: "취소" });
                     EDITOR.clear();
                     await tableRefreshPopup.show();
@@ -419,33 +384,43 @@ export async function rebuildTableActions(force = false, silentUpdate = USER.tab
                 }
 
                 // 채팅 기록 업데이트
-                const chat = USER.getContext().chat;
                 const { piece } = USER.getChatPiece()
                 if (piece) {
-                    convertOldTablesToNewSheets(clonedTables, piece)
-                    await USER.getContext().saveChat(); // 저장 완료 대기
+                    for (const index in cleanContentTable) {
+                        let sheet;
+                        const table = cleanContentTable[index];
+                        if (table.tableUid){
+                            sheet = BASE.getChatSheet(table.tableUid)
+                        }else if(table.tableIndex !== undefined) {
+                            const uid = DERIVED.any.waitingTableIdMap[table.tableIndex]
+                            sheet = BASE.getChatSheet(uid)
+                        }else{
+                            const uid = DERIVED.any.waitingTableIdMap[index]
+                            sheet = BASE.getChatSheet(uid)
+                        }
+                        if(!sheet) {
+                            console.error(`无法找到表格 ${table.tableName} 对应的sheet`);
+                            continue;
+                        }
+                        const valueSheet = [table.columns, ...table.content].map(row => ['', ...row])
+                        sheet.rebuildHashSheetByValueSheet(valueSheet);
+                        sheet.save(piece, true)
+                    }
+                    await USER.getContext().saveChat(); // 等待保存完成
                 } else {
-                    throw new Error("채팅 기록이 비어 있습니다");
+                    throw new Error("채팅 기록이 비어 있습니다. 최소한 하나의 채팅 기록이 생긴 후에만 요약해 주세요.");
                 }
 
-                // UI 새로고침
-                const tableContainer = document.querySelector('#tableContainer');
-                if (tableContainer) {
-                    BASE.refreshContextView();
-                    updateSystemMessageTableStatus();
-                    EDITOR.success('테이블 생성 성공!');
-                    r = 'success';
-                } else {
-                    // console.error("테이블을 새로고칠 수 없습니다: 컨테이너를 찾을 수 없습니다");
-                    // EDITOR.error('테이블 생성 실패: 컨테이너를 찾을 수 없습니다');
-                }
-                return r;
+                BASE.refreshContextView();
+                updateSystemMessageTableStatus();
+                EDITOR.success('테이블 생성 성공！');
             } catch (error) {
                 console.error('테이블 저장 중 오류 발생:', error);
                 EDITOR.error(`테이블 생성 실패`, error.message, error);
             }
         } else {
             EDITOR.error("테이블 생성 저장 실패: 내용이 비어 있습니다");
+            true
         }
 
     } catch (e) {
@@ -454,251 +429,31 @@ export async function rebuildTableActions(force = false, silentUpdate = USER.tab
     } finally {
 
     }
+    // #endregion
 }
 
-export async function refreshTableActions(force = false, silentUpdate = false, chatToBeUsed = '') {
-    if (!SYSTEM.lazy('refreshTableActions', 1000)) return;
+async function showTextPreview(text) {
+    const previewHtml = `
+        <div>
+            <span style="margin-right: 10px;">반환된 요약 결과를 복사하여 사용하세요</span>
+        </div>
+        <textarea rows="10" style="width: 100%">${text}</textarea>
+    `;
 
-    // // 강제 새로고침이 아닌 경우 계속할지 확인
-    // if (!force) {
-    //     // 설정 상태 표시
-    //     const tableRefreshPopup = getRefreshTableConfigStatus();
-    //     const confirmation = await EDITOR.callGenericPopup(tableRefreshPopup, EDITOR.POPUP_TYPE.CONFIRM, '', { okButton: "계속하기", cancelButton: "취소" });
-    //     if (!confirmation) return;
-    // }
+    const popup = new EDITOR.Popup(previewHtml, EDITOR.POPUP_TYPE.TEXT, '', { wide: true });
+    await popup.show();
+}
 
-    // 테이블 정리 실행 시작
-    const twoStepIsUseMainAPI = $('#step_by_step_use_main_api').prop('checked');
+async function showErrorTextPreview(text) {
+    const previewHtml = `
+        <div>
+            <span style="margin-right: 10px;">이는 스크립트에서 구문 분석할 수 없는 AI가 반환한 정보이므로 중지됩니다</span>
+        </div>
+        <textarea rows="10" style="width: 100%">${text}</textarea>
+    `;
 
-    try {
-        const { piece } = BASE.getLastSheetsPiece();
-        if (!piece) {
-            throw new Error('findLastestTableData가 유효한 테이블 데이터를 반환하지 않았습니다');
-        }
-        const latestTables = BASE.hashSheetsToSheets(piece.hash_sheets);
-        DERIVED.any.waitingTable = latestTables;
-
-        let chat = USER.getContext().chat;
-        let originText = '<테이블 내용>\n' + latestTables
-            .map((table, index) => table.getTableText(index, ['title', 'node', 'headers', 'rows']))
-            .join("\n");
-
-        // 최근 clear_up_stairs개의 채팅 기록 가져오기
-        const lastChats = chatToBeUsed === '' ? await getRecentChatHistory(chat, USER.tableBaseSetting.clear_up_stairs, USER.tableBaseSetting.ignore_user_sent) : chatToBeUsed;
-
-        // AI 프롬프트 구성
-        let systemPrompt = USER.tableBaseSetting.refresh_system_message_template;
-        let userPrompt = USER.tableBaseSetting.refresh_user_message_template;
-
-        // systemPrompt에서 $0과 $1 필드를 검색하여 $0을 originText로, $1을 lastChats로 대체
-        systemPrompt = systemPrompt.replace(/\$0/g, originText);
-        systemPrompt = systemPrompt.replace(/\$1/g, lastChats);
-
-        // userPrompt에서 $0과 $1 필드를 검색하여 $0을 originText로, $1을 lastChats로 대체
-        userPrompt = userPrompt.replace(/\$0/g, originText);
-        userPrompt = userPrompt.replace(/\$1/g, lastChats);
-
-
-        // 응답 내용 생성
-        let rawContent;
-        if (twoStepIsUseMainAPI) {
-            try {
-                rawContent = await handleMainAPIRequest(systemPrompt, userPrompt);
-                if (rawContent === 'suspended') {
-                    EDITOR.info('작업이 취소되었습니다');
-                    return 'suspended'
-                }
-            } catch (error) {
-                EDITOR.error('주 API 요청 오류: ' , error.message, error);
-            }
-        }
-        else {
-            try {
-                rawContent = await handleCustomAPIRequest(systemPrompt, userPrompt);
-                if (rawContent === 'suspended') {
-                    EDITOR.info('작업이 취소되었습니다');
-                    return 'suspended'
-                }
-            } catch (error) {
-                EDITOR.error('사용자 정의 API 요청 오류: ' , error.message, error);
-            }
-        }
-
-        // 데이터 정제
-        let cleanContent = cleanApiResponse(rawContent);
-
-        // 응답 내용 파싱
-        let actions;
-        try {
-            // 데이터 정제 로직 강화
-            cleanContent = cleanContent
-                // 시간 형식 보호 (최우선 처리!!!!)
-                .replace(/(?<!")(\d{1,2}:\d{2})(?!")/g, '"$1"') // 중복 처리 방지를 위해 부정적 전방/후방 탐색 사용
-                // 키 이름 통일
-                .replace(/"([a-zA-Z_]\w*)"\s*:/g, '"$1":') // 유효한 키 이름 형식만 처리
-                // 끝 쉼표 수정
-                .replace(/,\s*([}\]])/g, '$1')
-                // 숫자 키 처리 (시간 처리 후 실행)
-                .replace(/([{,]\s*)(\d+)(\s*:)/g, '$1"$2"$3')
-                // 기타 처리
-                .replace(/\\\//g, '/')
-                .replace(/\/\/.*/g, ''); // 행 주석 제거
-
-            // 안전성 검사
-            if (!cleanContent || typeof cleanContent !== 'string') {
-                throw new Error('유효하지 않은 응답 내용');
-            }
-
-            actions = JSON5.parse(cleanContent);
-            if (!validateActions(actions)) {
-                throw new Error('AI가 유효하지 않은 작업 형식을 반환했습니다');
-            }
-        } catch (parseError) {
-            // 에러 위치 오류 처리 추가
-            const position = parseError.position || 0;
-            console.error('[파싱 오류] 상세 로그:', {
-                rawContent: cleanContent,
-                errorPosition: parseError.stack,
-                previewText: cleanContent.slice(
-                    Math.max(0, position - 50),
-                    position + 50
-                )
-            });
-            throw new Error(`JSON 파싱 실패: ${parseError.message}`);
-        }
-        console.log('정제된 내용:', cleanContent);
-
-        // 중복 제거 및 삭제 작업 순서 보장
-        let uniqueActions = [];
-        const deleteActions = [];
-        const nonDeleteActions = [];
-        // 삭제 작업과 비삭제 작업 분리
-        actions.forEach(action => {
-            if (action.action.toLowerCase() === 'delete') {
-                deleteActions.push(action);
-            } else {
-                nonDeleteActions.push(action);
-            }
-        });
-
-        // 비삭제 작업 중복 제거, 테이블 기존 내용 고려
-        const uniqueNonDeleteActions = nonDeleteActions.filter((action, index, self) => {
-            if (action.action.toLowerCase() === 'insert') {
-                const table = DERIVED.any.waitingTable[action.tableIndex];
-
-                // 오류 처리
-                if (!table) {
-                    console.warn(`테이블 인덱스 ${action.tableIndex}가 유효하지 않아 작업을 건너뜁니다:`, action);
-                    return;
-                }
-                if (!table.content || !Array.isArray(table.content)) {
-                    const tableNameForLog = table.tableName ? `(이름: ${table.tableName})` : '';
-                    console.warn(`테이블 인덱스 ${action.tableIndex} ${tableNameForLog}의 'content' 속성이 유효하지 않거나 배열이 아닙니다. 빈 배열로 초기화합니다. 원본 'content':`, table.content);
-                    table.content = [];
-                }
-
-
-                const dataStr = JSON.stringify(action.data);
-                // 检查是否已存在完全相同的行
-                const existsInTable = table.content.some(row => JSON.stringify(row) === dataStr);
-                const existsInPreviousActions = self.slice(0, index).some(a =>
-                    a.action.toLowerCase() === 'insert' &&
-                    a.tableIndex === action.tableIndex &&
-                    JSON.stringify(a.data) === dataStr
-                );
-                return !existsInTable && !existsInPreviousActions;
-            }
-            return index === self.findIndex(a =>
-                a.action === action.action &&
-                a.tableIndex === action.tableIndex &&
-                a.rowIndex === action.rowIndex &&
-                JSON.stringify(a.data) === JSON.stringify(action.data)
-            );
-        });
-
-        // 去重删除 작업并按 rowIndex 降序排序
-        const uniqueDeleteActions = deleteActions
-            .filter((action, index, self) =>
-                index === self.findIndex(a => (
-                    a.tableIndex === action.tableIndex &&
-                    a.rowIndex === action.rowIndex
-                ))
-            )
-            .sort((a, b) => b.rowIndex - a.rowIndex); // 降序排序，确保大 rowIndex 先执行
-
-        // 合并 작업：先非删除，后删除
-        uniqueActions = [...uniqueNonDeleteActions, ...uniqueDeleteActions];
-
-        // 如果不是静默업데이트，显示 작업确认
-        if (!silentUpdate) {
-            // 将uniqueActions内容推送给用户确认是否继续
-            const confirmContent = confirmTheOperationPerformed(uniqueActions);
-            const tableRefreshPopup = new EDITOR.Popup(confirmContent, EDITOR.POPUP_TYPE.TEXT, '', { okButton: "계속하기", cancelButton: "취소" });
-            EDITOR.clear();
-            await tableRefreshPopup.show();
-            if (!tableRefreshPopup.result) {
-                EDITOR.info('작업이 취소되었습니다');
-                return;
-            }
-        }
-
-        // 处理用户确认的 작업
-        // 执行 작업
-        uniqueActions.forEach(action => {
-            switch (action.action.toLowerCase()) {
-                case 'update':
-                    try {
-                        const targetRow = DERIVED.any.waitingTable[action.tableIndex].content[action.rowIndex];
-                        if (!targetRow || !targetRow[0]?.trim()) {
-                            console.log(`Skipped update: table ${action.tableIndex} row ${action.rowIndex} 첫 번째 열이 비어 있습니다`);
-                            break;
-                        }
-                        updateRow(action.tableIndex, action.rowIndex, action.data);
-                        console.log(`Updated: table ${action.tableIndex}, row ${action.rowIndex}`, DERIVED.any.waitingTable[action.tableIndex].content[action.rowIndex]);
-                    } catch (error) {
-                        console.error(`Update 작업 실패: ${error.message}`);
-                    }
-                    break;
-                case 'insert':
-                    const requiredColumns = findTableStructureByIndex(action.tableIndex)?.columns || [];
-                    const isDataComplete = requiredColumns.every((_, index) => action.data.hasOwnProperty(index.toString()));
-                    if (!isDataComplete) {
-                        console.error(`삽입 실패：테이블 ${action.tableIndex} 필수 열 데이터가 누락되었습니다`);
-                        break;
-                    }
-                    insertRow(action.tableIndex, action.data);
-                    break;
-                case 'delete':
-                    if (action.tableIndex === 0 || !USER.tableBaseSetting.bool_ignore_del) {
-                        const deletedRow = DERIVED.any.waitingTable[action.tableIndex].content[action.rowIndex];
-                        deleteRow(action.tableIndex, action.rowIndex);
-                        console.log(`Deleted: table ${action.tableIndex}, row ${action.rowIndex}`, deletedRow);
-                    } else {
-                        console.log(`Ignore: table ${action.tableIndex}, row ${action.rowIndex}`);
-                    }
-                    break;
-            }
-        });
-
-        if (USER.tableBaseSetting.bool_ignore_del) {
-            EDITOR.success('삭제 보호가 활성화되어 삭제 작업이 무시되었습니다 (플러그인 설정에서 변경 가능)');
-        }
-
-        // 업데이트 채팅 데이터
-        chat = USER.getContext().chat[USER.getContext().chat.length - 1];
-        chat.dataTable = DERIVED.any.waitingTable;
-        USER.getContext().saveChat();
-        // 새로고침 UI
-        const tableContainer = document.querySelector('#tableContainer');
-        BASE.refreshContextView();
-        updateSystemMessageTableStatus()
-        EDITOR.success('테이블 요약 완료');
-    } catch (error) {
-        console.error('요약 과정 중 오류 발생:', error);
-        EDITOR.error(`요약 실패`, error.message, error);
-    } finally {
-
-    }
+    const popup = new EDITOR.Popup(previewHtml, EDITOR.POPUP_TYPE.TEXT, '', { wide: true });
+    await popup.show();
 }
 
 export async function rebuildSheets() {
@@ -722,7 +477,7 @@ export async function rebuildSheets() {
 
     // Replace jQuery append with standard DOM methods
     const h3Element = document.createElement('h3');
-    h3Element.textContent = '테이블 데이터 재구축';
+    h3Element.textContent = '테이블 데이터 재구성';
     container.appendChild(h3Element);
 
     const previewDiv1 = document.createElement('div');
@@ -779,7 +534,7 @@ export async function rebuildSheets() {
     $selector.val(defaultTemplate);
     // 템플릿 정보 표시 업데이트
     if (defaultTemplate === 'rebuild_base') {
-        $templateInfo.text("기본 템플릿으로 Gemini, Grok, DeepSeek에 적합하며, 채팅 기록과 테이블 정보를 사용하여 테이블을 재구성합니다. 초기 양식 작성, 테이블 최적화 등의 시나리오에 적용됩니다. 제한은 TT 선생님으로부터. ");
+        $templateInfo.text("기본 템플릿으로 Gemini, Grok, DeepSeek에 적합하며, 채팅 기록과 테이블 정보를 사용하여 테이블을 재구성함. 초기 양식 작성, 테이블 최적화 등의 시나리오에 적용됨. 제한은 TT 선생님으로부터. ");
     } else {
         const templateInfo = temps[defaultTemplate]?.info || '템플릿 정보 없음';
         $templateInfo.text(templateInfo);
@@ -810,30 +565,6 @@ export async function rebuildSheets() {
 }
 
 
-
-
-
-/**________________________________________다음은 도우미 함수입니다_________________________________________*/
-/**________________________________________다음은 도우미 함수입니다_________________________________________*/
-/**________________________________________다음은 도우미 함수입니다_________________________________________*/
-
-
-
-// 将Table数组序열化为字符串
-function tablesToString(sheets) {
-    return JSON.stringify(sheetsToTables(sheets));
-}
-
-// 将sheets转化为tables
-export function sheetsToTables(sheets) { // Ensure this is exported
-    return sheets.map((sheet, index) => ({
-        tableName: sheet.name,
-        tableIndex: index,
-        columns: sheet.getHeader(),
-        content: sheet.getContent()
-    }))
-}
-
 // 将tablesData파싱回Table数组
 function tableDataToTables(tablesData) {
     return tablesData.map(item => {
@@ -848,39 +579,6 @@ function tableDataToTables(tablesData) {
             insertedRows: item.insertedRows || [],
             updatedRows: item.updatedRows || []
         }
-    });
-}
-
-/**
- * 标记테이블变动的内容，用于render时标记颜色
- * @param {*} oldTables
- * @param {*} newTables  *
- */
-function compareAndMarkChanges(oldTables, newTables) {
-    console.log("변동 사항 표시：", oldTables, newTables);
-    newTables.forEach((newTable, tableIndex) => {
-        const oldTable = oldTables[tableIndex];
-        newTable.insertedRows = [];
-        newTable.updatedRows = [];
-
-        // 标记新增行（过滤空行）
-        newTable.content.filter(Boolean).forEach((_, rowIndex) => {
-            if (rowIndex >= oldTable.content.filter(Boolean).length) {
-                newTable.insertedRows.push(rowIndex);
-            }
-        });
-
-        // 标记업데이트单元格（只比较有效行）
-        oldTable.content.filter(Boolean).forEach((oldRow, rowIndex) => {
-            const newRow = newTable.content[rowIndex];
-            if (newRow) {
-                oldRow.forEach((oldCell, colIndex) => {
-                    if (newRow[colIndex] !== oldCell) {
-                        newTable.updatedRows.push(`${rowIndex}-${colIndex}`);
-                    }
-                });
-            }
-        });
     });
 }
 
@@ -955,372 +653,23 @@ async function getRecentChatHistory(chat, chatStairs, ignoreUserSent = false, to
     return chatHistory;
 }
 
-// 测试清理效果
-window.testFuncClean = function (strTest) {
-    strTest = ``
-    cleanApiResponse(strTest)
-};
-
-/**
- * API 응답의 원본 내용 정제
- * @param {string} rawContent - 원본 API 응답 내용
- * @param {Object} [options={}] - 정제 설정 옵션
- * @param {boolean} [options.removeCodeBlock=true] - JSON 코드 블록 마커 제거 여부
- * @param {boolean} [options.extractJson=true] - 첫 번째 JSON 배열/객체 추출 여부
- * @param {boolean} [options.normalizeKeys=true] - 키 이름 형식 통일 여부
- * @param {boolean} [options.convertSingleQuotes=true] - 작은따옴표를 큰따옴표로 변환 여부
- * @param {boolean} [options.removeBlockComments=true] - 블록 주석 제거 여부
- * @returns {string} 정제된 표준화 내용
- */
-function cleanApiResponse(rawContent, options = {}) {
-    const {
-        removeCodeBlock = true,       // 코드 블록 마커 제거
-        extractJson = true,           // JSON 부분 추출
-        normalizeKeys = true,         // 키 이름 형식 통일
-        convertSingleQuotes = true,   // 작은따옴표를 큰따옴표로 변환
-        normalizeTableStructure = true, // 테이블 구조 표준화, tablename에서 columns 부분 처리, 중국어 따옴표를 영어 따옴표로 변환
-        normalizeAndValidateColumnsContentPairs = true, // 테이블 구조 표준화, content 부분 처리, 중국어 따옴표를 영어 따옴표로 변환, 열 수와 행 수 일치 여부 및 형식 문제 확인, 문제 시 원본으로 복구
-        removeBlockComments = true    // 블록 주석 제거
-    } = options;
-
-    let content = rawContent;
-
-    // 按顺序执行清洗步骤
-    if (removeCodeBlock) {
-        // ```json과 ``` 코드 블록 마커 제거
-        content = content.replace(/```json|```/g, '');
-        console.log("removeCodeBlock", content)
-    }
-    if (extractJson) {
-        // 첫 번째 완전한 JSON 배열/객체 추출(여러 줄 매칭 지원)
-        const start = content.indexOf('[');
-        const end = content.lastIndexOf(']');
-        if (start === -1 || end === -1 || end <= start) {
-            console.error('유효한 JSON 배열 구조를 찾을 수 없습니다');
-            return null;
-        }
-        content = content.slice(start, end + 1);
-    }
-    if (normalizeKeys) {
-        // 키 이름 형식 통일: 따옴표가 있거나 없는 키 이름을 큰따옴표로 표준화
-        content = content.replace(/([{,]\s*)(?:"?([a-zA-Z_]\w*)"?\s*:)/g, '$1"$2":');
-        console.log("normalizeKeys", content)
-    }
-    if (convertSingleQuotes) {
-        // 将单引号转换为双引号（JSON标准要求双引号）
-        content = content.replace(/'/g, '"');
-        console.log("convertSingleQuotes", content)
-    }
-    if (normalizeTableStructure) {
-        // 标准化테이블结构，处理tablename到columns部分，中文引号改为英文引号
-        const regex = /([\"“”])tableName\1\s*:\s*([\"“”])(.+?)\2\s*,\s*([\"“”])tableIndex\4\s*:\s*(\d+)\s*,\s*([\"“”])columns(?:[\"“”]?)/g;
-        content = content.replace(regex, (match, g1QuoteKeyTable, g2QuoteValueTable, g3TableName, g4QuoteKeyIndex, g5TableIndex, g6QuoteKeyColumns) => {
-            return `"tableName":"${g3TableName}","tableIndex":${g5TableIndex},"columns"`;
-        });
-        console.log("normalizeTableStructure", content)
-    }
-    function replaceQuotesInContext(text) {
-        if (typeof text !== 'string') return text;
-        return text.replace(/[“”]/g, (match, offset, fullString) => {
-            const charBefore = offset > 0 ? fullString[offset - 1] : null;
-            const charAfter = offset + match.length < fullString.length ? fullString[offset + match.length] : null;
-            const contextChars = ['[', ']', ','];
-
-            if ((charBefore && contextChars.includes(charBefore)) || (charAfter && contextChars.includes(charAfter))) {
-                return '"';
-            }
-            return match;
-        });
-    }
-
-    if (normalizeAndValidateColumnsContentPairs) {
-        // 标准化테이블结构，处理content部分，中文引号改为英文引号，然后检查열数和行数是否匹配以及格式问题，否则回退到原始内容
-        const regex = /([\"“”])columns\1\s*:\s*(\[.*?\])\s*,\s*([\"“”])content\3\s*:\s*(\[(?:\[.*?\](?:,\s*\[.*?\])*)?\])/g;
-        content = content.replace(regex, (match, _quoteKeyColumns, columnsArrayStr, _quoteKeyContent, contentArrayStr) => {
-            let normalizedColumnsArrayStr = replaceQuotesInContext(columnsArrayStr);
-            let normalizedContentArrayStr = replaceQuotesInContext(contentArrayStr);
-
-            let columns;
-            try {
-                columns = JSON.parse(normalizedColumnsArrayStr);
-                if (!Array.isArray(columns) || !columns.every(col => typeof col === 'string')) {
-                    console.warn("경고: 'columns' 부분 파싱 후 유효한 문자열 배열이 아닙니다. 원본 부분:", columnsArrayStr, "처리 후 파싱 시도:", normalizedColumnsArrayStr, "파싱 결과:", columns);
-                    return match;
-                }
-            } catch (e) {
-                console.warn("경고: 'columns' 배열 파싱 실패。오류:", e, "원본 부분:", columnsArrayStr, "처리 후 파싱 시도:", normalizedColumnsArrayStr);
-                return match;
-            }
-
-            let contentRows;
-            try {
-                contentRows = JSON.parse(normalizedContentArrayStr);
-                if (!Array.isArray(contentRows)) {
-                    console.warn("경고: 'content' 부분 파싱 후 유효한 배열이 아닙니다. 원본 부분:", contentArrayStr, "처리 후 파싱 시도:", normalizedContentArrayStr, "파싱 결과:", contentRows);
-                    return match;
-                }
-            } catch (e) {
-                console.warn("경고: 'content' 배열 파싱 실패。오류:", e, "원본 부분:", contentArrayStr, "처리 후 파싱 시도:", normalizedContentArrayStr);
-                return match;
-            }
-
-            const numColumns = columns.length;
-            const validatedContentRows = [];
-            let allRowsValid = true;
-
-            for (const row of contentRows) {
-                if (!Array.isArray(row) || row.length !== numColumns) {
-                    console.warn(`경고: 내용이 열 개수(${numColumns})와 불일치. 배열이 행과 불일치. 행 데이터:`, row);
-                    allRowsValid = false;
-                    break;
-                }
-                if (!row.every(cell => typeof cell === 'string')) {
-                    console.warn("경고: 행 내용 중 모든 셀의 데이터가 문자열이 아닙니다. 행 데이터:", row);
-                    allRowsValid = false;
-                    break;
-                }
-                validatedContentRows.push(row);
-            }
-
-            if (!allRowsValid) {
-                console.warn("경고: 'content' 배열의 일부 행이 유효성 검사를 통과하지 못했습니다. 해당 'columns'-'content' 조각은 수정되지 않을 것입니다.");
-                return match;
-            }
-
-            const finalColumnsStr = JSON.stringify(columns);
-            const finalContentStr = JSON.stringify(validatedContentRows);
-
-            return `"columns":${finalColumnsStr},"content":${finalContentStr}`;
-        });
-        console.log("normalizeAndValidateColumnsContentPairs", content)
-    }
-    if (removeBlockComments) {
-        // 移除 /* ... */ 形式的块注释
-        content = content.replace(/\/\*.*?\*\//g, '');
-        console.log("removeBlockComments", content)
-    }
-    // 通过括号配平来确定JSON的结束位置
-    const openChar = content[0];
-    const closeChar = (openChar === '[') ? ']' : '}';
-    let balance = 0;
-    let lastCharIndex = -1;
-
-    for (let i = 0; i < content.length; i++) {
-        if (content[i] === openChar) {
-            balance++;
-        } else if (content[i] === closeChar) {
-            balance--;
-        }
-        if (balance === 0) {
-            lastCharIndex = i;
-            content = content.substring(0, lastCharIndex + 1);
-            break;
-        }
-    }
-
-    // 去除首尾空白
-    content = content.trim();
-    console.log('정리 전 내용:', rawContent);
-    console.log('정리 후 내용:', content);
-
-    return content;
-}
-
 /**
  * 修复데이블式
  * @param {string} inputText - 输入的文本
  * @returns {string} 修复后的文本
  * */
 function fixTableFormat(inputText) {
-    const safeParse = (str) => {
-        try {
-            return JSON.parse(str);
-        } catch (primaryError) {
-            // 深度清洗：处理未闭合引号和注释
-            const deepClean = str
-                .replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"$2":')  // 修复键名引号
-                .replace(/\/\/.*?\n/g, '')    // 移除行注释
-                .replace(/([:,])\s*([^"{[\s-]+)(\s*[}\]])/g, '$1 "$2"$3') // 补全缺失引号
-                .replace(/'/g, '"')           // 单引号转双引号
-                .replace(/(\w)\s*"/g, '$1"')  // 清理键名后多余空格
-                .replace(/,\s*]/g, ']')       // 移除尾逗号
-                .replace(/}\s*{/g, '},{');    // 修复缺失的数组分隔符
-
-            try {
-                return JSON.parse(deepClean);
-            } catch (fallbackError) {
-                throw new Error(`파싱실패: ${fallbackError.message}`);
-            }
-        }
-    };
-
-    const extractTable = (text) => {
-        let balance = 0;
-        let startIndex = -1;
-        let inString = false;
-        let escapeNext = false;
-
-        // 查找潜在数组的第一个왼쪽 대괄호
-        let initialArrayIndex = -1;
-        for (let i = 0; i < text.length; i++) {
-            if (text[i] === '[') {
-                initialArrayIndex = i;
-                break;
-            }
-        }
-
-        if (initialArrayIndex === -1) {
-            console.warn("extractTable: 왼쪽 대괄호를 찾을 수 없습니다 '['. 정규식으로 되돌아갑니다.");
-            const regex = /\[(?:[^\[\]"]|"(?:\\.|[^"\\])*"|\{[^{}]*?\})*?\]/g;
-            let match;
-            const candidates = [];
-            while ((match = regex.exec(text)) !== null) {
-                try {
-                    JSON5.parse(match[0]);
-                    candidates.push(match[0]);
-                } catch (e) { /* 忽略无效的JSON */ }
-            }
-            if (candidates.length > 0) return candidates.sort((a, b) => b.length - a.length)[0];
-            const simpleCandidates = text.match(/\[[^\[\]]*\]/g) || [];
-            return simpleCandidates.sort((a, b) => b.length - a.length)[0] || null;
-        }
-
-        startIndex = initialArrayIndex;
-
-        for (let i = startIndex; i < text.length; i++) {
-            const char = text[i];
-
-            if (escapeNext) {
-                escapeNext = false;
-                continue;
-            }
-
-            if (char === '\\') {
-                escapeNext = true;
-                continue;
-            }
-
-            if (char === '"') {
-                inString = !inString;
-            }
-
-            if (inString) {
-                continue;
-            }
-
-            if (char === '[') {
-                balance++;
-            } else if (char === ']') {
-                balance--;
-                if (balance === 0 && startIndex !== -1) {
-                    const extracted = text.substring(startIndex, i + 1);
-                    try {
-                        JSON5.parse(extracted);
-                        return extracted;
-                    } catch (e) {
-                        console.error("extractTable: 괄호 개수로 조각 추출, 유효한 JSON이 아닙니다. 조각:", extracted, "오류:", e, "롤백");
-                        startIndex = -1; // 使当前尝试无效
-                        balance = 0; // 重置计数
-                        break; // 退出循环以进行回退
-                    }
-                }
-            }
-        }
-        EDITOR.clear();
-        EDITOR.error("API에서 오류 메시지가 반환되었습니다!");
-        EDITOR.error(inputText.length > 300 ? inputText.slice(0, 300) + '...' : inputText);
-        throw new Error("완전하고 유효한 JSON 배열을 찾을 수 없어 프로세스가 중단되었습니다!");
-
-        // console.warn("extractTable: 括号计数未能找到完整的有效JSON数组。将回退到正则테이블达式。");
-        // const regex = /\[(?:[^\[\]"]|"(?:\\.|[^"\\])*"|\{[^{}]*?\})*?\]/g;
-        // let match;
-        // const candidates = [];
-        // while((match = regex.exec(text)) !== null) {
-        //     try {
-        //         JSON5.parse(match[0]);
-        //         candidates.push(match[0]);
-        //     } catch(e) { /* 忽略无效的JSON */ }
-        // }
-        //
-        // if (candidates.length > 0) {
-        //     return candidates.sort((a, b) => b.length - a.length)[0];
-        // }
-
-        // console.warn("extractTable: 改进的正则테이블达式也실패了。将回退到原始的简单正则테이블达式。");
-        // const simpleCandidates = text.match(/\[[^\[\]]*\]/g) || [];
-        // return simpleCandidates.sort((a, b) => b.length - a.length)[0] || null;
-    };
-
-    // 主流程
     try {
-        let jsonStr = cleanApiResponse(inputText)
-        console.log('cleanApiResponse预处理后:', jsonStr);
-        jsonStr = extractTable(jsonStr);
-        console.log('extractTable提取后:', jsonStr);
-        if (!jsonStr) throw new Error("유효한 테이블 데이터를 찾을 수 없습니다");
-
-        // 关键预处理：修复常见格式错误
-        jsonStr = jsonStr
-            .replace(/(\w)\s*"/g, '$1"')        // 键名后空格
-            .replace(/:\s*([^"{\[]+)(\s*[,}])/g, ': "$1"$2')    // 值缺失引号
-            .replace(/"tableIndex":\s*"(\d+)"/g, '"tableIndex": $1')    // 移除tableIndex的引号
-            .replace(/"\s*\+\s*"/g, '')         // 拼接字符串残留
-            .replace(/\\n/g, '')                // 秼除换行转义
-            .replace(/({|,)\s*([a-zA-Z_]+)\s*:/g, '$1"$2":')    // 键名标准化
-            .replace(/"(\d+)":/g, '$1:')  // 修复数字键格式
-
-        console.log('关键预处理修复常见格式오류后:', jsonStr);
-
-        // 强约束파싱
-        let tables = safeParse(jsonStr);
-        console.log('safeParse 강력한 제약으로 파싱:', tables);
-
-        tables = tables.map(table => ({  // 新增：类型转换
-            ...table,
-            tableIndex: parseInt(table.tableIndex) || 0
-        }));
-
-
-        // 열对齐修正
-        return tables.map((table, index) => {
-            if (!table || typeof table !== 'object') {
-                console.error(`테이블의 처리 인덱스 ${index} 오류：유효하지 않은 테이블 데이터（null、undefined 객체가 아님）。 획득：`, table);
-                return { tableName: `무효 테이블 (인덱스 ${index})`, columns: [], content: [] }; // 返回默认的空테이블结构
-            }
-
-            let columnCount = 0;
-            if (table.columns) {
-                if (Array.isArray(table.columns)) {
-                    columnCount = table.columns.length;
-                } else {
-                    console.error(`테이블 "${table.tableName || `(원본 인덱스 ${index})`}"가 매핑 인덱스 ${index}에 있는 테이블 구조 오류: 'columns' 속성이 배열이 아닙니다. 찾은 내용:`, table.columns);
-                }
-            } else {
-                console.error(`테이블 "${table.tableName || `(원본 인덱스 ${index})`}"가 매핑 인덱스 ${index}에 있는 테이블 구조 오류: 'columns' 속성이 누락되었습니다. 찾은 내용:`, table);
-            }
-
-            if (Array.isArray(table.content)) {
-                table.content = table.content.map(row => {
-                    if (row === null || row === undefined) {
-                        return Array(columnCount).fill("");
-                    }
-                    return Array.from({ length: columnCount }, (_, i) => row[i]?.toString().trim() || "");
-                });
-            } else {
-                console.error(`테이블 "${table.tableName || `(원본 인덱스 ${index})`}"가 매핑 인덱스 ${index}에 있는 테이블 구조 오류: 'content' 속성이 배열이 아닙니다. 찾은 내용:`, table.content);
-                table.content = []; // 如果 'content' 不是数组或缺失，则默认为空
-            }
-            return table;
-        });
+        return safeParse(inputText);
     } catch (error) {
         console.error("파싱 실패:", error);
-        throw new Error('테이블 데이터를 파싱할 수 없습니다');
-        // 原暴力提取逻辑已禁用
-        // const rawTables = inputText.match(/{[^}]*?"tableIndex":\s*\d+[^}]*}/g) || [];
-        // const sixTables = rawTables.slice(0, 6).map(t => JSON.parse(t.replace(/'/g, '"')));
-        // return sixTables
+        const popup = new EDITOR.Popup(`스크립트가 반환된 데이터를 구문 분석할 수 없음. 이는 제한 위반 또는 잘못된 출력 형식에 문제가 있기 때문일 수 있음. 반환된 데이터는 다음과 같음：<div>${inputText}</div>`, EDITOR.POPUP_TYPE.CONFIRM, '', { okButton: "확신" });
+        popup.show();
+        throw new Error('표 데이터를 구문 분석할 수 없음');
     }
 }
+
+window.fixTableFormat = fixTableFormat; // 暴露给全局
 
 /**
  * 修改重整理模板

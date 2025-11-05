@@ -4,6 +4,8 @@ import { PopupMenu } from '../../components/popupMenu.js';
 import { Form } from '../../components/formManager.js';
 import { openSheetStyleRendererPopup } from "./sheetStyleEditor.js";
 import { compareDataDiff } from "../../utils/utility.js";
+import {SheetBase} from "../../core/table/base.js"
+import { Cell } from '../../core/table/cell.js';
 
 let drag = null;
 let currentPopupMenu = null;
@@ -33,7 +35,7 @@ const formConfigs = {
                     // { value: 'option', text: '옵션' },
                 ]
             },
-            { label: '열 설명', description: '', type: 'textarea', rows: 4, dataKey: 'columnNote' },
+            //{ label: '열 설명', description: '', type: 'textarea', rows: 4, dataKey: 'columnNote' },
         ],
     },
     row_header: {
@@ -41,7 +43,7 @@ const formConfigs = {
         formDescription: "행의 제목과 설명 정보 설정.",
         fields: [
             { label: '행 제목', type: 'text', dataKey: 'value' },
-            { label: '행 설명', description: '(AI에게 이 행의 용도 설명)', type: 'textarea', rows: 4, dataKey: 'rowNote' },
+            //{ label: '행 설명', description: '(AI에게 이 행의 용도 설명)', type: 'textarea', rows: 4, dataKey: 'rowNote' },
         ],
     },
     cell: {
@@ -49,7 +51,7 @@ const formConfigs = {
         formDescription: "셀의 구체적인 내용 편집.",
         fields: [
             { label: '셀 내용', type: 'textarea', dataKey: 'value' },
-            { label: '셀 설명', description: '(AI에게 이 셀 내용의 용도 설명)', type: 'textarea', rows: 4, dataKey: 'cellPrompt' },
+            //{ label: '셀 설명', description: '(AI에게 이 셀 내용의 용도 설명)', type: 'textarea', rows: 4, dataKey: 'cellPrompt' },
         ],
     },
     sheetConfig: {
@@ -333,15 +335,15 @@ function bindCellClickEvent(cell) {
         const sheetType = cell.parent.type;
 
         if (rowIndex === 0 && colIndex === 0) {
-            cell.parent.currentPopupMenu.add('<i class="fa fa-arrow-right"></i> 오른쪽에 열 삽입', (e) => { handleAction(cell, cell.CellAction.insertRightColumn) });
-            if (sheetType === cell.parent.SheetType.free || sheetType === cell.parent.SheetType.static) {
-                cell.parent.currentPopupMenu.add('<i class="fa fa-arrow-down"></i> 아래에 행 삽입', (e) => { handleAction(cell, cell.CellAction.insertDownRow) });
+            cell.parent.currentPopupMenu.add('<i class="fa fa-arrow-right"></i> 오른쪽에 열 삽입', (e) => { handleAction(cell, Cell.CellAction.insertRightColumn) });
+            if (sheetType === SheetBase.SheetType.free || sheetType === SheetBase.SheetType.static) {
+                cell.parent.currentPopupMenu.add('<i class="fa fa-arrow-down"></i> 아래에 행 삽입', (e) => { handleAction(cell, Cell.CellAction.insertDownRow) });
             }
         } else if (rowIndex === 0) {
             cell.parent.currentPopupMenu.add('<i class="fa fa-i-cursor"></i> 선택 열 편집', async (e) => { await templateCellDataEdit(cell) });
-            cell.parent.currentPopupMenu.add('<i class="fa fa-arrow-left"></i> 왼쪽에 열 삽입', (e) => { handleAction(cell, cell.CellAction.insertLeftColumn) });
-            cell.parent.currentPopupMenu.add('<i class="fa fa-arrow-right"></i> 오른쪽에 열 삽입', (e) => { handleAction(cell, cell.CellAction.insertRightColumn) });
-            cell.parent.currentPopupMenu.add('<i class="fa fa-trash-alt"></i> 열 삭제', (e) => { handleAction(cell, cell.CellAction.deleteSelfColumn) });
+            cell.parent.currentPopupMenu.add('<i class="fa fa-arrow-left"></i> 왼쪽에 열 삽입', (e) => { handleAction(cell, Cell.CellAction.insertLeftColumn) });
+            cell.parent.currentPopupMenu.add('<i class="fa fa-arrow-right"></i> 오른쪽에 열 삽입', (e) => { handleAction(cell, Cell.CellAction.insertRightColumn) });
+            cell.parent.currentPopupMenu.add('<i class="fa fa-trash-alt"></i> 열 삭제', (e) => { handleAction(cell, Cell.CellAction.deleteSelfColumn) });
         } else if (colIndex === 0) {
             // if (sheetType === cell.parent.SheetType.dynamic) {
             //     cell.element.delete();
@@ -349,13 +351,13 @@ function bindCellClickEvent(cell) {
             // }
 
             cell.parent.currentPopupMenu.add('<i class="fa fa-i-cursor"></i> 선택 행 편집', async (e) => { await templateCellDataEdit(cell) });
-            if (sheetType === cell.parent.SheetType.free || sheetType === cell.parent.SheetType.static) {
-                cell.parent.currentPopupMenu.add('<i class="fa fa-arrow-up"></i> 위에 행 삽입', (e) => { handleAction(cell, cell.CellAction.insertUpRow) });
-                cell.parent.currentPopupMenu.add('<i class="fa fa-arrow-down"></i> 아래에 행 삽입', (e) => { handleAction(cell, cell.CellAction.insertDownRow) });
-                cell.parent.currentPopupMenu.add('<i class="fa fa-trash-alt"></i> 행 삭제', (e) => { handleAction(cell, cell.CellAction.deleteSelfRow) });
+            if (sheetType === SheetBase.SheetType.free || sheetType === SheetBase.SheetType.static) {
+                cell.parent.currentPopupMenu.add('<i class="fa fa-arrow-up"></i> 위에 행 삽입', (e) => { handleAction(cell, Cell.CellAction.insertUpRow) });
+                cell.parent.currentPopupMenu.add('<i class="fa fa-arrow-down"></i> 아래에 행 삽입', (e) => { handleAction(cell, Cell.CellAction.insertDownRow) });
+                cell.parent.currentPopupMenu.add('<i class="fa fa-trash-alt"></i> 행 삭제', (e) => { handleAction(cell, Cell.CellAction.deleteSelfRow) });
             }
         } else {
-            if (sheetType === cell.parent.SheetType.static) {
+            if (sheetType === SheetBase.SheetType.static) {
                 cell.parent.currentPopupMenu.add('<i class="fa fa-i-cursor"></i> 선택 셀 편집', async (e) => { await templateCellDataEdit(cell) });
             } else {
                 return;
@@ -444,7 +446,7 @@ async function updateDragTables() {
         //     return
         // }
 
-        const tableElement = sheet.renderSheet(bindCellClickEvent, sheet.hashSheet.slice(0, 1));
+        const tableElement = sheet.renderSheet(bindCellClickEvent, sheet.hashSheet.slice(0, 1), NaN);
         tableElement.style.marginLeft = '5px'
         renderedTables.set(uid, tableElement);
         container.append(tableElement);

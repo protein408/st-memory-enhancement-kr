@@ -12,11 +12,14 @@ import { functionToBeRegistered } from "./services/debugs.js";
 import { parseLooseDict, replaceUserTag } from "./utils/stringUtil.js";
 import {executeTranslation} from "./services/translate.js";
 import applicationFunctionManager from "./services/appFuncManager.js"
+import {SheetBase} from "./core/table/base.js";
+import { Cell } from "./core/table/cell.js";
+import { initExternalDataAdapter } from './external-data-adapter.js';
 
 
 console.log("______________________메모리 플러그인: 로딩 시작______________________")
 
-const VERSION = '2.1.1'
+const VERSION = '2.2.0'
 
 const editErrorInfo = {
     forgotCommentTag: false,
@@ -78,7 +81,7 @@ export function buildSheetsByTemplates(targetPiece) {
             const newSheet = BASE.createChatSheetByTemp(template);
             newSheet.save(targetPiece);
         } catch (error) {
-            EDITOR.error(`[Memory Enhancement] 템플릿에서 sheet 생성 또는 저장 중 오류:`, "", error);
+            EDITOR.error(`[Memory Enhancement] 템플릿에서 sheet 생성 또는 저장 중 오류:`, error.message, error);
         }
     })
     BASE.updateSelectBySheetStatus()
@@ -110,8 +113,8 @@ export function convertOldTablesToNewSheets(oldTableList, targetPiece) {
         // 테이블이 존재하지 않으면 새 테이블 생성
         const newSheet = BASE.createChatSheet(cols, rows);
         newSheet.name = oldTable.tableName
-        newSheet.domain = newSheet.SheetDomain.chat
-        newSheet.type = newSheet.SheetType.dynamic
+        newSheet.domain = SheetBase.SheetDomain.chat
+        newSheet.type = SheetBase.SheetType.dynamic
         newSheet.enable = oldTable.enable
         newSheet.required = oldTable.Required
         newSheet.tochat = true
@@ -374,14 +377,14 @@ function executeAction(EditAction, sheets) {
             Object.entries(action.data).forEach(([key, value]) => {
                 const cell = sheet.findCellByPosition(rowIndex + 1, parseInt(key) + 1)
                 if (!cell) return -1
-                cell.newAction(cell.CellAction.editCell, { value }, false)
+                cell.newAction(Cell.CellAction.editCell, { value }, false)
             })
             break
         case 'insert': {
             // 삽입 작업 실행
             const cell = sheet.findCellByPosition(sheet.getRowCount() - 1, 0)
             if (!cell) return -1
-            cell.newAction(cell.CellAction.insertDownRow, {}, false)
+            cell.newAction(Cell.CellAction.insertDownRow, {}, false)
             const lastestRow = sheet.getRowCount() - 1
             const cells = sheet.getCellsByRowIndex(lastestRow)
             if(!cells || !action.data) return
@@ -396,7 +399,7 @@ function executeAction(EditAction, sheets) {
             const deleteRow = parseInt(action.rowIndex) + 1
             const cell = sheet.findCellByPosition(deleteRow, 0)
             if (!cell) return -1
-            cell.newAction(cell.CellAction.deleteSelfRow, {}, false)
+            cell.newAction(Cell.CellAction.deleteSelfRow, {}, false)
             break
     }
     console.log("테이블 편집 작업 실행", EditAction)
@@ -432,7 +435,15 @@ function formatParams(paramArray) {
             return Number(trimmed);
         }
         if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-            return parseLooseDict(trimmed);
+            const parsed = parseLooseDict(trimmed);
+            if (typeof parsed === 'object' && parsed !== null) {
+                Object.keys(parsed).forEach(key => {
+                    if (!/^\d+$/.test(key)) {
+                        delete parsed[key];
+                    }
+                });
+            }
+            return parsed;
         }
 
         // 기타 경우는 모두 문자열 반환
@@ -533,11 +544,11 @@ async function onChatCompletionPromptReady(eventData) {
     try {
         // 단계별 테이블 작성 모드 우선 처리
         if (USER.tableBaseSetting.step_by_step === true) {
-            // 플러그인과 AI 테이블 읽기 기능이 활성화된 경우에만 주입
+            // 仅当插件和AI读表功能开启时才注入
             if (USER.tableBaseSetting.isExtensionAble === true && USER.tableBaseSetting.isAiReadTable === true) {
-                const tableData = getTablePrompt(eventData, true); // 순수 데이터 가져오기
-                if (tableData) { // 주입할 내용이 있는지 확인
-                    const finalPrompt = `다음은 테이블로 기록된 현재 시나리오 정보와 히스토리 정보입니다. 이를 참고하여 생각해야 합니다:\n${tableData}`;
+                const tableData = getTablePrompt(eventData, true); // 获取纯净数据
+                if (tableData) { // 确保有内容可注入
+                    const finalPrompt = `以下是通过表格记录的当前场景信息以及历史记录信息，你需要以此为参考进行思考：\n${tableData}`;
                     if (USER.tableBaseSetting.deep === 0) {
                         eventData.chat.push({ role: getMesRole(), content: finalPrompt });
                     } else {
@@ -766,13 +777,12 @@ export async function undoSheets(deep) {
  * @description 새로운 Sheet 시스템을 사용하여 테이블 뷰 업데이트
  * @returns {Promise<*[]>}
  */
-async function updateSheetsView(mesId) {
-    const task = new SYSTEM.taskTiming('openAppHeaderTableDrawer_task')
+export async function updateSheetsView(mesId) {
     try{
-       // 테이블 뷰 새로고침
-        console.log("========================================\n표 보기 업데이트")
+       // 刷新表格视图
+        console.log("========================================\n更新表格视图")
         refreshTempView(true).then(() => task.log());
-        console.log("========================================\n표 내용 보기 업데이트")
+        console.log("========================================\n更新表格内容视图")
         BASE.refreshContextView(mesId).then(() => task.log());
 
         // 시스템 메시지의 테이블 상태 업데이트
@@ -808,12 +818,23 @@ jQuery(async () => {
         ext_exportAllTablesAsJson,
     };
 
+    // 初始化外部数据适配器
+    try {
+        initExternalDataAdapter({ debugMode: false });
+        console.log("______________________外部数据适配器：初始化成功______________________");
+    } catch (error) {
+        console.error("外部数据适配器初始化失败:", error);
+    }
+
     // 버전 확인
     fetch("http://api.muyoo.com.cn/check-version", {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clientVersion: VERSION, user: USER.getContext().name1 })
     }).then(res => res.json()).then(res => {
         if (res.success) {
-            if (!res.isLatest) $("#tableUpdateTag").show()
+            if (!res.isLatest) {
+                $("#tableUpdateTag").show()
+                $("#setting_button_new_tag").show() // 显示设置按钮的New标记
+            }
             if (res.toastr) EDITOR.warning(res.toastrText)
             if (res.message) $("#table_message_tip").html(res.message)
         }
@@ -914,7 +935,7 @@ jQuery(async () => {
 
     executeTranslation(); // 번역 함수 실행
 
-    // 메인 프로그램 이벤트 리스닝
+    // 监听主程序事件
     APP.eventSource.on(APP.event_types.MESSAGE_RECEIVED, onMessageReceived);
     APP.eventSource.on(APP.event_types.CHAT_COMPLETION_PROMPT_READY, onChatCompletionPromptReady);
     APP.eventSource.on(APP.event_types.CHAT_CHANGED, onChatChanged);

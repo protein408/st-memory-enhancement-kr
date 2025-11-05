@@ -152,6 +152,9 @@ export async function handleMainAPIRequest(systemPrompt, userPrompt, isSilent = 
 
         console.log('주 API 요청의 다중 메시지 배열:', messages); // Log the actual array
         // Use TavernHelper.generateRaw with the array, enabling streaming
+
+        if(!TavernHelper) throw new Error("酒馆助手未安装，总结功能依赖于酒馆助手插件，请安装后刷新");
+
         const response = await TavernHelper.generateRaw({
             ordered_prompts: messages, // Pass the array directly
             should_stream: true,      // Re-enable streaming

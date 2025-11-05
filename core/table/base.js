@@ -21,8 +21,8 @@ const customStyleConfig = {
 }
 
 export class SheetBase {
-    SheetDomain = SheetDomain;
-    SheetType = SheetType;
+    static SheetDomain = SheetDomain;
+    static SheetType = SheetType;
 
     constructor() {
         // 以下为基本属性
@@ -104,11 +104,11 @@ export class SheetBase {
             this.cells.set(cell.uid, cell);
             this.cellHistory.push(cell);
             if (i === 0 && j === 0) {
-                cell.type = cell.CellType.sheet_origin;
+                cell.type = Cell.CellType.sheet_origin;
             } else if (i === 0) {
-                cell.type = cell.CellType.column_header;
+                cell.type = Cell.CellType.column_header;
             } else if (j === 0) {
-                cell.type = cell.CellType.row_header;
+                cell.type = Cell.CellType.row_header;
             }
             return cell.uid;
         }));
@@ -120,18 +120,28 @@ export class SheetBase {
     rebuildHashSheetByValueSheet(valueSheet) {
         const cols = valueSheet[0].length
         const rows = valueSheet.length
+        const usedCellUids = []; // 跟踪已使用的单元格uid
         const newHashSheet = Array.from({ length: rows }, (_, i) => Array.from({ length: cols }, (_, j) => {
+            const value = valueSheet[i][j] || '';
+            const cellType = this.getCellTypeByPosition(i, j);
+            // 如果存在相同值的单元格，则复用该单元格，但排除已使用的单元格
+            const oldCell = this.findCellByValue(valueSheet[i][j] || '', cellType, usedCellUids)
+            if (oldCell) {
+                usedCellUids.push(oldCell.uid); // 标记为已使用
+                return oldCell.uid; // 复用已有单元格
+            }
             const cell = new Cell(this);
             this.cells.set(cell.uid, cell);
             this.cellHistory.push(cell);
             cell.data.value = valueSheet[i][j] || ''; // 设置单元格的值
             if (i === 0 && j === 0) {
-                cell.type = cell.CellType.sheet_origin;
+                cell.type = Cell.CellType.sheet_origin;
             } else if (i === 0) {
-                cell.type = cell.CellType.column_header;
+                cell.type = Cell.CellType.column_header;
             } else if (j === 0) {
-                cell.type = cell.CellType.row_header;
+                cell.type = Cell.CellType.row_header;
             }
+            usedCellUids.push(cell.uid); // 标记新创建的单元格为已使用
             return cell.uid;
         }));
         this.hashSheet = newHashSheet
@@ -145,6 +155,19 @@ export class SheetBase {
         if(this.sourceData) this.source.data = this.sourceData
 
         this.markPositionCacheDirty();
+    }
+
+    getCellTypeByPosition(rowIndex, colIndex) {
+        if (rowIndex === 0 && colIndex === 0) {
+            return Cell.CellType.sheet_origin;
+        }
+        if (rowIndex === 0) {
+            return Cell.CellType.column_header;
+        }
+        if (colIndex === 0) {
+            return Cell.CellType.row_header;
+        }
+        return Cell.CellType.cell;
     }
 
     loadCells() {
@@ -174,13 +197,13 @@ export class SheetBase {
                             this.cells.set(cell.uid, cell);
                         }
                         if (rowIndex === 0 && colIndex === 0) {
-                            cell.type = cell.CellType.sheet_origin;
+                            cell.type = Cell.CellType.sheet_origin;
                         } else if (rowIndex === 0) {
-                            cell.type = cell.CellType.column_header;
+                            cell.type = Cell.CellType.column_header;
                         } else if (colIndex === 0) {
-                            cell.type = cell.CellType.row_header;
+                            cell.type = Cell.CellType.row_header;
                         } else {
-                            cell.type = cell.CellType.cell;
+                            cell.type = Cell.CellType.cell;
                         }
                     });
                 });
@@ -191,8 +214,12 @@ export class SheetBase {
         }
     }
 
-    findCellByValue(value) {
-        const cell = this.cellHistory.find(cell => cell.data.value === value);
+    findCellByValue(value, cellType = null, excludeUids = []) {
+        const cell = this.cellHistory.find(cell => 
+            cell.data.value === value && 
+            (cellType === null || cell.type === cellType) &&
+            !excludeUids.includes(cell.uid)
+        );
         if (!cell) {
             return null;
         }
@@ -209,7 +236,7 @@ export class SheetBase {
         if (!target) {
             const cell = new Cell(this);
             cell.data.value = '빈 데이터';
-            cell.type = colIndex === 0 ? cell.CellType.row_header : rowIndex === 0 ? cell.CellType.column_header : cell.CellType.cell;
+            cell.type = colIndex === 0 ? Cell.CellType.row_header : rowIndex === 0 ? Cell.CellType.column_header : Cell.CellType.cell;
             cell.uid = hash;
             this.cells.set(cell.uid, cell);
             return cell;
@@ -239,7 +266,7 @@ export class SheetBase {
         const content = this.hashSheet.slice(removeHeader?1:0).map((row, index) => row.map(cellUid => {
             const cell = this.cells.get(cellUid)
             if (!cell) return ""
-            return cell.type === cell.CellType.row_header ? index : cell.data[key]
+            return cell.type === Cell.CellType.row_header ? index : cell.data[key]
         }).join(',')).join('\n');
         return content + "\n";
     }

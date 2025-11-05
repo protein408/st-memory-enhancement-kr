@@ -1,19 +1,19 @@
 import { BASE, DERIVED, EDITOR, SYSTEM, USER } from '../../core/manager.js';
 import { updateSystemMessageTableStatus } from "../renderer/tablePushToChat.js";
-import { findNextChatWhitTableData,undoSheets } from "../../index.js";
+import { findNextChatWhitTableData, undoSheets } from "../../index.js";
 import { rebuildSheets } from "../runtime/absoluteRefresh.js";
 import { openTableHistoryPopup } from "./tableHistory.js";
 import { PopupMenu } from "../../components/popupMenu.js";
 import { openTableStatisticsPopup } from "./tableStatistics.js";
 import { openCellHistoryPopup } from "./cellHistory.js";
 import { openSheetStyleRendererPopup } from "./sheetStyleEditor.js";
+import { Cell } from "../../core/table/cell.js";
 
 let tablePopup = null
 let copyTableData = null
 let selectedCell = null
 let editModeSelectedRows = []
 let viewSheetsContainer = null
-let lastCellsHashSheet = null
 const userTableEditInfo = {
     chatIndex: null,
     editAble: false,
@@ -28,8 +28,8 @@ const userTableEditInfo = {
  * @param {*} tables 所有테이블 데이터
  */
 export async function copyTable() {
-    copyTableData = JSON.stringify(getTableJson({type:'chatSheets', version: 1}))
-    if(!copyTableData) return
+    copyTableData = JSON.stringify(getTableJson({ type: 'chatSheets', version: 1 }))
+    if (!copyTableData) return
     $('#table_drawer_icon').click()
 
     EDITOR.confirm(`표 데이터 복사 중 (#${SYSTEM.generateRandomString(4)})`, '취소', '현재 대화에 붙여넣기').then(async (r) => {
@@ -56,7 +56,7 @@ async function pasteTable() {
     if (confirmation) {
         if (copyTableData) {
             const tables = JSON.parse(copyTableData)
-            if(!tables.mate === 'chatSheets')  return EDITOR.error("가져오기 실패: 파일 형식이 올바르지 않습니다.")
+            if(!tables.mate === 'chatSheets')  return EDITOR.error("Import failed: Incorrect file format")
             BASE.applyJsonToChatSheets(tables)
             await renderSheetsDOM()
             EDITOR.success('붙여넣기 성공')
@@ -99,18 +99,18 @@ async function importTable(mesId, viewSheetsContainer) {
             // 当文件读取성공后，会触发 onload 事件
             reader.onload = async function (loadEvent) {
                 const button = { text: '템플릿 및 데이터 가져오기', result: 3 }
-                const popup = new EDITOR.Popup("가져올 부분을 선택해주세요.", EDITOR.POPUP_TYPE.CONFIRM, '', { okButton: "템플릿 및 데이터 가져오기", cancelButton: "취소"});
+                const popup = new EDITOR.Popup("가져올 부분을 선택해주세요.", EDITOR.POPUP_TYPE.CONFIRM, '', { okButton: "템플릿 및 데이터 가져오기", cancelButton: "취소" });
                 const result = await popup.show()
                 if (result) {
-                        const tables = JSON.parse(loadEvent.target.result)
-                        console.log("가져오기 내용", tables, tables.mate, !(tables.mate === 'chatSheets'))
-                        if(!(tables.mate?.type === 'chatSheets'))  return EDITOR.error("가져오기 실패: 파일 형식이 올바르지 않습니다.", "가져오신 데이터가 표 데이터인지 확인해 주세요.")
-                        if(result === 3)
-                            BASE.applyJsonToChatSheets(tables, "data")
-                        else
-                            BASE.applyJsonToChatSheets(tables)
-                        await renderSheetsDOM()
-                        EDITOR.success('가져오기 성공')
+                    const tables = JSON.parse(loadEvent.target.result)
+                    console.log("가져오기 내용", tables, tables.mate, !(tables.mate === 'chatSheets'))
+                    if (!(tables.mate?.type === 'chatSheets')) return EDITOR.error("가져오기 실패: 파일 형식이 올바르지 않습니다.", "가져오신 데이터가 표 데이터인지 확인해 주세요.")
+                    if (result === 3)
+                        BASE.applyJsonToChatSheets(tables, "data")
+                    else
+                        BASE.applyJsonToChatSheets(tables)
+                    await renderSheetsDOM()
+                    EDITOR.success('가져오기 성공')
                 }
             };
             reader.readAsText(file, 'UTF-8'); // 建议指定 UTF-8 编码，确保中文等字符正常读取
@@ -124,8 +124,8 @@ async function importTable(mesId, viewSheetsContainer) {
  * @param {Array} tables 所有테이블 데이터
  */
 async function exportTable() {
-    const jsonTables = getTableJson({type:'chatSheets', version: 1})
-    if(!jsonTables) return
+    const jsonTables = getTableJson({ type: 'chatSheets', version: 1 })
+    if (!jsonTables) return
     const bom = '\uFEFF';
     const blob = new Blob([bom + JSON.stringify(jsonTables)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -212,7 +212,7 @@ async function cellDataEdit(cell) {
     if (result) {
         cell.editCellData({ value: result })
         refreshContextView();
-        if(cell.type === cell.CellType.column_header) BASE.refreshTempView(true)
+        if (cell.type === Cell.CellType.column_header) BASE.refreshTempView(true)
     }
 }
 
@@ -256,7 +256,7 @@ function batchEditMode(cell) {
 // 新的事件处理함수
 export function cellClickEditModeEvent(cell) {
     cell.element.style.cursor = 'pointer'
-    if (cell.type === cell.CellType.row_header) {
+    if (cell.type === Cell.CellType.row_header) {
         cell.element.textContent = ''
 
         // 在 cell.element 中添加三个 div，一个用于显示排序，一个用于显示锁定按钮，一个用于显示删除按钮
@@ -284,7 +284,7 @@ export function cellClickEditModeEvent(cell) {
         $(deleteDiv).on('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
-            handleAction(cell, cell.CellAction.deleteSelfRow)
+            handleAction(cell, Cell.CellAction.deleteSelfRow)
             //if (cell.locked) return
 
             /* cell.parent.hashSheet.forEach(row => {
@@ -302,7 +302,7 @@ export function cellClickEditModeEvent(cell) {
         $(containerDiv).append(indexDiv).append(rightDiv)
         $(cell.element).append(containerDiv)
 
-    } else if (cell.type === cell.CellType.cell) {
+    } else if (cell.type === Cell.CellType.cell) {
         cell.element.style.cursor = 'text'
         cell.element.contentEditable = true
         cell.element.focus()
@@ -327,65 +327,6 @@ async function confirmAction(event, text = '이 작업을 계속하시겠습니�
     event()
 }
 
-/**
- * 单元格高亮
- */
-export function cellHighlight(sheet) {
-    const lastHashSheet = lastCellsHashSheet[sheet.uid] || []
-    if ((sheet.hashSheet.length < 2) && (lastHashSheet.length < 2)) return;    //테이블 내용为空的时候不执行后续함수,提高健壮性
-    const hashSheetFlat = sheet.hashSheet.flat()
-    const lastHashSheetFlat = lastHashSheet.flat()
-    let deleteRow = []
-    lastHashSheet.forEach((row, index) => {
-        if (!hashSheetFlat.includes(row[0])) {
-            deleteRow.push(row[0])
-            sheet.hashSheet.splice(index,0,lastHashSheet[index])
-        }
-    })
-
-    const changeSheet = sheet.hashSheet.map((row) => {
-        const isNewRow = !lastHashSheetFlat.includes(row[0])
-        const isDeletedRow = deleteRow.includes(row[0])
-        return row.map((hash) => {
-            if (isNewRow) return { hash, type: "newRow" }
-            if (isDeletedRow) return { hash, type: "deletedRow" }
-            if (!lastHashSheetFlat.includes(hash)) return { hash, type: "update" }
-            return { hash, type: "keep" }
-        })
-    })
-    changeSheet.forEach((row, index) => {
-        if (index === 0)
-            return
-        let isKeepAll = true
-        row.forEach((cell) => {
-            let sheetCell = sheet.cells.get(cell.hash)
-            const cellElement = sheetCell.element
-            if (cell.type === "newRow") {
-                cellElement.classList.add('insert-item')
-                isKeepAll = false
-            } else if (cell.type === "update") {
-                cellElement.classList.add('update-item')
-                isKeepAll = false
-            } else if (cell.type === "deletedRow") {
-                sheetCell.isDeleted = true
-                cellElement.classList.add('delete-item')
-                isKeepAll = false
-            } else if (sheetCell.isDeleted === true) {
-                cellElement.classList.add('delete-item')
-                isKeepAll = false
-            } else {
-                cellElement.classList.add('keep-item')
-            }
-        })
-        if (isKeepAll) {
-            row.forEach((cell) => {
-                const cellElement = sheet.cells.get(cell.hash).element
-                cellElement.classList.add('keep-all-item')
-            })
-        }
-    })
-}
-
 async function cellHistoryView(cell) {
     await openCellHistoryPopup(cell)
 }
@@ -401,15 +342,6 @@ async function customSheetStyle(cell) {
 
 function cellClickEvent(cell) {
     cell.element.style.cursor = 'pointer'
-
-    // 判断是否需要根据历史数据进行高亮
-    /* const lastCellUid = lastCellsHashSheet.has(cell.uid)
-    if (!lastCellUid) {
-        cell.element.style.backgroundColor = '#00ff0011'
-    }
-    else if (cell.parent.cells.get(lastCellUid).data.value !== cell.data.value) {
-        cell.element.style.backgroundColor = '#0000ff11'
-    } */
 
     cell.on('click', async (event) => {
         event.stopPropagation();
@@ -430,19 +362,19 @@ function cellClickEvent(cell) {
 
         if (rowIndex === 0 && colIndex === 0) {
             menu.add('<i class="fa-solid fa-bars-staggered"></i> 일괄 행 편집', () => batchEditMode(cell));
-            menu.add('<i class="fa fa-arrow-right"></i> 오른쪽에 열 삽입', () => handleAction(cell, cell.CellAction.insertRightColumn));
-            menu.add('<i class="fa fa-arrow-down"></i> 아래에 행 삽입', () => handleAction(cell, cell.CellAction.insertDownRow));
+            menu.add('<i class="fa fa-arrow-right"></i> 오른쪽에 열 삽입', () => handleAction(cell, Cell.CellAction.insertRightColumn));
+            menu.add('<i class="fa fa-arrow-down"></i> 아래에 행 삽입', () => handleAction(cell, Cell.CellAction.insertDownRow));
             menu.add('<i class="fa-solid fa-wand-magic-sparkles"></i> 사용자 정의 표 스타일', async () => customSheetStyle(cell));
         } else if (colIndex === 0) {
             menu.add('<i class="fa-solid fa-bars-staggered"></i> 일괄 행 편집', () => batchEditMode(cell));
-            menu.add('<i class="fa fa-arrow-up"></i> 위에 행 삽입', () => handleAction(cell, cell.CellAction.insertUpRow));
-            menu.add('<i class="fa fa-arrow-down"></i> 아래에 행 삽입', () => handleAction(cell, cell.CellAction.insertDownRow));
-            menu.add('<i class="fa fa-trash-alt"></i> 행 삭제', () => handleAction(cell, cell.CellAction.deleteSelfRow), menu.ItemType.warning)
+            menu.add('<i class="fa fa-arrow-up"></i> 위에 행 삽입', () => handleAction(cell, Cell.CellAction.insertUpRow));
+            menu.add('<i class="fa fa-arrow-down"></i> 아래에 행 삽입', () => handleAction(cell, Cell.CellAction.insertDownRow));
+            menu.add('<i class="fa fa-trash-alt"></i> 행 삭제', () => handleAction(cell, Cell.CellAction.deleteSelfRow), menu.ItemType.warning)
         } else if (rowIndex === 0) {
             menu.add('<i class="fa fa-i-cursor"></i> 해당 열 편집', async () => await cellDataEdit(cell));
-            menu.add('<i class="fa fa-arrow-left"></i> 왼쪽에 열 삽입', () => handleAction(cell, cell.CellAction.insertLeftColumn));
-            menu.add('<i class="fa fa-arrow-right"></i> 오른쪽에 열 삽입', () => handleAction(cell, cell.CellAction.insertRightColumn));
-            menu.add('<i class="fa fa-trash-alt"></i> 열 삭제', () => confirmAction(() => { handleAction(cell, cell.CellAction.deleteSelfColumn) }, '열을 삭제하시겠습니까？'), menu.ItemType.warning);
+            menu.add('<i class="fa fa-arrow-left"></i> 왼쪽에 열 삽입', () => handleAction(cell, Cell.CellAction.insertLeftColumn));
+            menu.add('<i class="fa fa-arrow-right"></i> 오른쪽에 열 삽입', () => handleAction(cell, Cell.CellAction.insertRightColumn));
+            menu.add('<i class="fa fa-trash-alt"></i> 열 삭제', () => confirmAction(() => { handleAction(cell, Cell.CellAction.deleteSelfColumn) }, '열을 삭제하시겠습니까？'), menu.ItemType.warning);
         } else {
             menu.add('<i class="fa fa-i-cursor"></i> 해당 셀 편집', async () => await cellDataEdit(cell));
             menu.add('<i class="fa-solid fa-clock-rotate-left"></i> 셀 기록', async () => await cellHistoryView(cell));
@@ -497,7 +429,7 @@ function cellClickEvent(cell) {
 function handleAction(cell, action) {
     cell.newAction(action)
     refreshContextView();
-    if(cell.type === cell.CellType.column_header) BASE.refreshTempView(true)
+    if (cell.type === Cell.CellType.column_header) BASE.refreshTempView(true)
 }
 
 export async function renderEditableSheetsDOM(_sheets, _viewSheetsContainer, _cellClickEvent = cellClickEvent) {
@@ -527,7 +459,7 @@ export async function renderEditableSheetsDOM(_sheets, _viewSheetsContainer, _ce
         } else {
             sheetElement = await instance.renderSheet(_cellClickEvent)
         }
-        cellHighlight(instance)
+        // 已集成到 Sheet.renderSheet 内部，这里无需再次调用
         console.log("렌더링 테이블：", sheetElement)
         $(sheetContainer).append(sheetElement)
 
@@ -559,11 +491,11 @@ async function renderSheetsDOM(mesId = -1) {
     DERIVED.any.renderingMesId = mesId
     updateSystemMessageTableStatus();
     task.log()
-    const {deep: lastestDeep} = BASE.getLastSheetsPiece()
-    const { piece, deep } = mesId === -1 ? {piece:USER.getContext().chat[lastestDeep], deep: lastestDeep} : {piece:USER.getContext().chat[mesId], deep: mesId}
+    const { deep: lastestDeep, piece: lastestPiece } = BASE.getLastSheetsPiece()
+    const { piece, deep } = mesId === -1 ? { piece: lastestPiece, deep: lastestDeep } : { piece: USER.getContext().chat[mesId], deep: mesId }
     if (!piece || !piece.hash_sheets) return;
 
-    if( deep === lastestDeep) DERIVED.any.isRenderLastest = true;
+    if (deep === lastestDeep) DERIVED.any.isRenderLastest = true;
     else DERIVED.any.isRenderLastest = false;
     DERIVED.any.renderDeep = deep;
 
@@ -578,19 +510,11 @@ async function renderSheetsDOM(mesId = -1) {
     })
     console.log('renderSheetsDOM:', piece, sheets)
     DERIVED.any.renderingSheets = sheets
-    task.log()
-    // 用于记录上一次的hash_sheets，渲染时根据上一次的hash_sheets进行高亮
-    if(deep != 0) {
-        lastCellsHashSheet = BASE.getLastSheetsPiece(deep - 1, 3, false)?.piece.hash_sheets;
-        if (lastCellsHashSheet) {
-            lastCellsHashSheet = BASE.copyHashSheets(lastCellsHashSheet)
-        }
-    }
-    
+
     task.log()
     $(viewSheetsContainer).empty()
     viewSheetsContainer.style.paddingBottom = '150px'
-    renderEditableSheetsDOM(sheets, viewSheetsContainer,DERIVED.any.isRenderLastest?undefined:()=>{})
+    renderEditableSheetsDOM(sheets, viewSheetsContainer, DERIVED.any.isRenderLastest ? undefined : () => { })
     $("#table_indicator").text(DERIVED.any.isRenderLastest ? "현재는 수정 가능한 활동 테이블입니다" : `현재는 ${deep}번째 채팅의 이전 테이블로，변경할 수 없습니다`)
     task.log()
 }
@@ -640,7 +564,7 @@ async function initTableView(mesId) {
     // 点击前테이블按钮
     $(document).on('click', '#table_prev_button', function () {
         const deep = DERIVED.any.renderDeep;
-        const { deep: prevDeep }  = BASE.getLastSheetsPiece(deep - 1, 20, false);
+        const { deep: prevDeep } = BASE.getLastSheetsPiece(deep - 1, 20, false);
         if (prevDeep === -1) {
             EDITOR.error("더 이상의 테이블 데이터는 없습니다")
             return
@@ -652,7 +576,7 @@ async function initTableView(mesId) {
     $(document).on('click', '#table_next_button', function () {
         const deep = DERIVED.any.renderDeep;
         console.log("현재 깊이：", deep)
-        const { deep: nextDeep }  = BASE.getLastSheetsPiece(deep + 1, 20, false, "down");
+        const { deep: nextDeep } = BASE.getLastSheetsPiece(deep + 1, 20, false, "down");
         if (nextDeep === -1) {
             EDITOR.error("더 이상의 테이블 데이터는 없습니다")
             return
@@ -664,7 +588,7 @@ async function initTableView(mesId) {
 }
 
 export async function refreshContextView(mesId = -1) {
-    if(BASE.contextViewRefreshing) return
+    if (BASE.contextViewRefreshing) return
     BASE.contextViewRefreshing = true
     await renderSheetsDOM(mesId);
     console.log("표 보기 새로고침")

@@ -8,6 +8,7 @@ import {initRefreshTypeSelector} from "../runtime/absoluteRefresh.js";
 import {rollbackVersion} from "../../services/debugs.js";
 import {customSheetsStylePopup} from "../editor/customSheetsStyle.js";
 import {openAppHeaderTableDrawer} from "../renderer/appHeaderTableBaseDrawer.js";
+import {buildSheetsByTemplates} from "../../index.js"
 
 /**
  * 格式化深度设置
@@ -179,6 +180,48 @@ async function importTableSet() {
                 initTableStructureToTemplate()
                 BASE.refreshTempView(true) // 새로고침模板视图
                 EDITOR.success('가져오기 성공, 선택한 설정이 초기화되었습니다.'); // 提示用户导入성공
+
+                // [新增] 若当前会话中的表数据“全部为空”，则清空 chat 域并用全局模板覆盖到 chat 域
+                try {
+                    const { piece } = USER.getChatPiece() || {};
+                    // 判定：若无载体则跳过（无法保存到聊天记录）
+                    if (piece) {
+                        // 先征询用户确认再执行替换
+                        const confirmReplace = await EDITOR.callGenericPopup(
+                            '是否替换掉当前聊天的模板（重要提示：替换会清空此聊天的旧表格数据且无法找回）',
+                            EDITOR.POPUP_TYPE.CONFIRM,
+                            '替换模板确认',
+                            { okButton: '清空并采用预设表格', cancelButton: '不替换' }
+                        );
+                        if (!confirmReplace) {
+                            EDITOR.success && EDITOR.success('已取消模板替换');
+                        } else {
+                            BASE.sheetsData.context = {}; // 清空 chat 域并用全局模板重建
+                            // 删除聊天列表中所有 piece 的 hash_sheets
+                            try {
+                                const chatArr = USER.getContext()?.chat || [];
+                                for (const msg of chatArr) {
+                                    if (msg && Object.prototype.hasOwnProperty.call(msg, 'hash_sheets')) {
+                                        delete msg.hash_sheets;
+                                    }
+                                }
+                            } catch (_) {}
+                            // 在当前载体上用全局模板重建
+                            buildSheetsByTemplates(piece);
+                            // 刷新界面与系统消息
+                            BASE.refreshContextView();
+                            BASE.refreshTempView(true)
+                            updateSystemMessageTableStatus(true);
+                            EDITOR.success('已用全局模板覆盖到 chat 域');
+                        }
+                    } else {
+                        // 无载体时给出明确提示
+                        EDITOR.warning('因为当前聊天没有聊天载体所以跳过预设表格模板替换');
+                    }
+                } catch (e) {
+                    // 静默失败，不影响导入主流程
+                    console.warn('[Preset Import] 覆盖 chat 域模板时发生非致命错误：', e);
+                }
 
             } catch (error) {
                 EDITOR.error('JSON 파일 해석에 실패했습니다. 파일 형식이 올바른지 확인해주세요.', error.message, error); // 提示 JSON 解析失败
