@@ -237,7 +237,7 @@ export class Sheet extends SheetBase {
         console.log('테이블 내용 프롬프트를 임포트합니다.', this)
         if (this.triggerSend && this.triggerSendDeep < 1) return ''; // 깊이 트리거=0이면 전송되지 않으며, 정보 요약표로 활용될 수 있습니다.
         const title = `* ${index}:${this.name}\n`;
-        const node = this.source.data.note && this.source.data.note !== '' ? '【说明】' + this.source.data.note + '\n' : '';
+        const node = this.source.data.note && this.source.data.note !== '' ? '【Description】' + this.source.data.note + '\n' : '';
         const headers = "rowIndex," + this.getCellsByRowIndex(0).slice(1).map((cell, index) => index + ':' + cell.data.value).join(',') + '\n';
         let rows = this.getSheetCSV()
         const editRules = this.#getTableEditRules() + '\n';
@@ -269,7 +269,7 @@ export class Sheet extends SheetBase {
             result += node;
         }
         if (customParts.includes('headers')) {
-            result += '【表格内容】\n' + headers;
+            result += '【Table of Contents】\n' + headers;
         }
         if (customParts.includes('rows')) {
             result += rows;
@@ -353,12 +353,12 @@ export class Sheet extends SheetBase {
      */
     #getTableEditRules() {
         const source = this.source;
-        if (this.required && this.isEmpty()) return '【增删改触发条件】\n삽입：' + source.data.initNode + '\n'
+        if (this.required && this.isEmpty()) return '【Add/Delete/Modify Trigger Conditions】\ninsert：' + source.data.initNode + '\n'
         else {
-            let editRules = '【增删改触发条件】\n'
-            if (source.data.insertNode) editRules += ('插入：' + source.data.insertNode + '\n')
-            if (source.data.updateNode) editRules += ('更新：' + source.data.updateNode + '\n')
-            if (source.data.deleteNode) editRules += ('删除：' + source.data.deleteNode + '\n')
+            let editRules = '【Add/Delete/Modify Trigger Conditions】\n'
+            if (source.data.insertNode) editRules += ('insert：' + source.data.insertNode + '\n')
+            if (source.data.updateNode) editRules += ('update：' + source.data.updateNode + '\n')
+            if (source.data.deleteNode) editRules += ('delete：' + source.data.deleteNode + '\n')
             return editRules
         }
     }
